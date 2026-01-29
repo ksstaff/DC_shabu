@@ -4,6 +4,8 @@ backend:
   branch: main
   base_url: https://dc-shabu-oauth.ks-staff00.workers.dev
   auth_endpoint: /auth
+  
+  site_url: https://dc-shabu.pages.dev
 
 media_folder: "public/uploads"
 public_folder: "/uploads"
