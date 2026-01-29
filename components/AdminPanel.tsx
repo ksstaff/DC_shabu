@@ -48,6 +48,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     return getApps().length > 0 ? getApp() : initializeApp(config);
   };
 
+  const isCloudConnected = !!settings.firebaseConfig?.projectId;
+
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>, setter: (url: string) => void) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -67,7 +69,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(products));
       localStorage.setItem(STORAGE_KEYS.CASES, JSON.stringify(cases));
 
-      if (settings.firebaseConfig?.projectId) {
+      if (isCloudConnected) {
         const app = getFirebaseApp(settings.firebaseConfig);
         const db = getFirestore(app);
         await setDoc(doc(db, 'site', 'master_data'), {
@@ -79,7 +81,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         });
         alert('클라우드 서버에 동기화되었습니다.');
       } else {
-        alert('로컬에 저장되었습니다.');
+        alert('로컬에 저장되었습니다. 클라우드 연동을 원하시면 시스템 탭에서 설정을 완료해주세요.');
       }
     } catch (err: any) {
       alert('저장 실패: ' + err.message);
@@ -112,7 +114,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       <aside className="w-64 bg-brandDark text-white fixed h-full z-10 overflow-y-auto">
         <button onClick={onLogout} className="w-full text-left p-8 border-b border-white/5 hover:bg-white/5 transition-colors group">
           <div className="text-xl font-black italic text-brandPrimary flex items-center gap-2">KT <span className="text-white">Admin</span></div>
-          <div className="text-[10px] text-gray-500 uppercase tracking-widest mt-1 italic">V4 Cloud Synced</div>
+          <div className={`text-[9px] uppercase tracking-widest mt-2 flex items-center gap-1.5 font-bold ${isCloudConnected ? 'text-green-400' : 'text-orange-400'}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${isCloudConnected ? 'bg-green-400 animate-pulse' : 'bg-orange-400'}`}></span>
+            {isCloudConnected ? 'CONNECTED: CLOUD' : 'LOCAL MODE (OFFLINE)'}
+          </div>
         </button>
         <nav className="p-4 space-y-1">
           {TABS.map(tab => (
@@ -132,7 +137,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             className="px-8 py-3 bg-brandPrimary text-white font-black rounded-xl shadow-lg hover:brightness-110 flex items-center gap-2 active:scale-95 transition-all"
           >
             {isSaving ? <i className="fa-solid fa-spinner animate-spin"></i> : <i className="fa-solid fa-cloud-arrow-up"></i>}
-            전체 저장 및 배포
+            {isCloudConnected ? '클라우드 업데이트' : '로컬 저장소에 저장'}
           </button>
         </header>
 
