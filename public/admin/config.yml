@@ -2,14 +2,8 @@ backend:
   name: github
   repo: ksstaff/DC_shabu
   branch: main
-
-backend:
-  name: github
-  repo: ksstaff/DC_shabu
-  branch: main
   base_url: https://dc-shabu-oauth.ks-staff00.workers.dev
   auth_endpoint: /auth
-
 
 media_folder: "public/uploads"
 public_folder: "/uploads"
