@@ -1,0 +1,40 @@
+backend:
+  name: github
+  repo: ksstaff/DC_shabu
+  branch: main
+
+media_folder: "public/uploads"
+public_folder: "/uploads"
+
+collections:
+  - name: "products"
+    label: "상품 안내"
+    folder: "content/products"
+    create: true
+    extension: "json"
+    format: "json"
+    fields:
+      - { label: "상품명", name: "title", widget: "string" }
+      - { label: "대표 이미지", name: "image", widget: "image" }
+      - { label: "설명", name: "body", widget: "text" }
+
+  - name: "cases"
+    label: "설치 사례"
+    folder: "content/cases"
+    create: true
+    extension: "json"
+    format: "json"
+    fields:
+      - { label: "매장명", name: "store", widget: "string" }
+      - { label: "사진들", name: "images", widget: "list", field: { label: "이미지", name: "image", widget: "image" } }
+      - { label: "설명", name: "body", widget: "text" }
+
+  - name: "notices"
+    label: "공지사항"
+    folder: "content/notices"
+    create: true
+    extension: "json"
+    format: "json"
+    fields:
+      - { label: "제목", name: "title", widget: "string" }
+      - { label: "내용", name: "body", widget: "text" }
