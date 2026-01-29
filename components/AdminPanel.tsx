@@ -367,7 +367,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                    className="w-full p-4 bg-gray-50 border-0 rounded-xl font-mono text-xs focus:ring-2 focus:ring-green-500/20" 
                  />
                  <p className="mt-2 text-[10px] text-gray-400 leading-relaxed font-medium">
-                   * 구글 스프레드시트의 '도구 > 스크립트 에디터'에서 웹 앱으로 배포한 URL을 입력하세요.<br/>
+                   * 구글 스프레드시트의 '도구 &gt; 스크립트 에디터'에서 웹 앱으로 배포한 URL을 입력하세요.<br />
                    상담 신청 시 자동으로 시트의 새로운 행으로 데이터가 추가됩니다.
                  </p>
                </div>
