@@ -1,5 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
+import { initializeApp, getApps, getApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, query, orderBy, getDocs } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
 import { Navbar } from './components/Navbar';
 import { Hero } from './components/Hero';
 import { ProductSection } from './components/ProductSection';
@@ -14,11 +16,11 @@ import { FloatingKakao } from './components/FloatingKakao';
 import { SiteSettings, Consultation, NewsPost, Product, InstallationCase } from './types';
 
 export const STORAGE_KEYS = {
-  SETTINGS: 'deungchon_kt_master_v3_settings',
-  NEWS: 'deungchon_kt_master_v3_news',
-  PRODUCTS: 'deungchon_kt_master_v3_products',
-  CASES: 'deungchon_kt_master_v3_cases',
-  CONSULTATIONS: 'deungchon_kt_master_v3_consultations'
+  SETTINGS: 'deungchon_kt_v4_settings',
+  NEWS: 'deungchon_kt_v4_news',
+  PRODUCTS: 'deungchon_kt_v4_products',
+  CASES: 'deungchon_kt_v4_cases',
+  CONSULTATIONS: 'deungchon_kt_v4_consultations'
 };
 
 const INITIAL_SETTINGS: SiteSettings = {
@@ -27,7 +29,7 @@ const INITIAL_SETTINGS: SiteSettings = {
   heroImageUrl: "https://images.unsplash.com/photo-1542623024-a797a755b8d0?auto=format&fit=crop&q=80&w=2070",
   announcement: "등촌샤브칼국수 가맹점 전용 프리미엄 DX 솔루션 프로모션 진행 중 - 지금 확인하세요!",
   webhookUrl: "",
-  googleSheetsUrl: "", // 초기값
+  googleSheetsUrl: "",
   buttonLabels: {
     navConsultation: "상담 신청",
     heroConsultation: "전문 상담 예약하기",
@@ -42,100 +44,124 @@ const INITIAL_SETTINGS: SiteSettings = {
   }
 };
 
-const INITIAL_PRODUCTS: Product[] = [
-  {
-    id: '1',
-    name: 'KT 하이오더',
-    description: '국내 1위 테이블 오더 솔루션. 매장 운영 효율성을 극대화하고 인건비를 획기적으로 절감합니다.',
-    image: 'https://images.unsplash.com/photo-1556742044-3c52d6e88c62?auto=format&fit=crop&q=80&w=800',
-    icon: 'fa-solid fa-tablet-screen-button',
-    linkUrl: '#consultation'
-  },
-  {
-    id: '2',
-    name: 'KT AI 서빙로봇',
-    description: '안정적인 주행과 정밀한 서빙. 단순 반복 업무는 로봇에게 맡기고 직원은 서비스에 집중하세요.',
-    image: 'https://images.unsplash.com/photo-1535378917042-10a22c95961a?auto=format&fit=crop&q=80&w=800',
-    icon: 'fa-solid fa-robot',
-    linkUrl: '#consultation'
-  }
-];
-
 const App: React.FC = () => {
   const [isAdmin, setIsAdmin] = useState(false);
   const [showAdminLogin, setShowAdminLogin] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
   const [settings, setSettings] = useState<SiteSettings>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.SETTINGS);
-    if (!saved) return INITIAL_SETTINGS;
+    return saved ? JSON.parse(saved) : INITIAL_SETTINGS;
+  });
+  const [news, setNews] = useState<NewsPost[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [cases, setCases] = useState<InstallationCase[]>([]);
+  const [consultations, setConsultations] = useState<Consultation[]>([]);
+
+  // Firebase 초기화 도우미 함수
+  const getFirebaseApp = (config: any) => {
     try {
-      const parsed = JSON.parse(saved);
-      return {
-        ...INITIAL_SETTINGS,
-        ...parsed,
-        buttonLabels: { ...INITIAL_SETTINGS.buttonLabels, ...(parsed.buttonLabels || {}) },
-        footer: { ...INITIAL_SETTINGS.footer, ...(parsed.footer || {}) }
-      };
-    } catch (e) { return INITIAL_SETTINGS; }
-  });
+      return getApps().length > 0 ? getApp() : initializeApp(config);
+    } catch (e) {
+      console.error("Firebase 초기화 에러:", e);
+      return null;
+    }
+  };
 
-  const [news, setNews] = useState<NewsPost[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.NEWS);
-    return saved ? JSON.parse(saved) : [];
-  });
+  // Firebase 실시간 데이터 리스닝
+  useEffect(() => {
+    let unsubscribeMaster: any = null;
+    let unsubscribeConsult: any = null;
 
-  const [products, setProducts] = useState<Product[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.PRODUCTS);
-    return saved ? JSON.parse(saved) : INITIAL_PRODUCTS;
-  });
+    if (settings.firebaseConfig?.projectId) {
+      try {
+        const app = getFirebaseApp(settings.firebaseConfig);
+        if (!app) {
+          setIsLoading(false);
+          return;
+        }
+        const db = getFirestore(app);
 
-  const [cases, setCases] = useState<InstallationCase[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.CASES);
-    return saved ? JSON.parse(saved) : [];
-  });
+        // 1. 설정 및 메인 데이터 실시간 동기화
+        unsubscribeMaster = onSnapshot(doc(db, 'site', 'master_data'), (docSnap) => {
+          if (docSnap.exists()) {
+            const remoteData = docSnap.data();
+            if (remoteData.settings) setSettings(prev => ({...prev, ...remoteData.settings}));
+            if (remoteData.news) setNews(remoteData.news);
+            if (remoteData.products) setProducts(remoteData.products);
+            if (remoteData.cases) setCases(remoteData.cases);
+          }
+          setIsLoading(false);
+        }, (err) => {
+          console.error("Firestore 접근 권한 오류 (Rules 확인 필요):", err);
+          setIsLoading(false);
+        });
 
-  const [consultations, setConsultations] = useState<Consultation[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.CONSULTATIONS);
-    return saved ? JSON.parse(saved) : [];
-  });
+        // 2. 상담 내역 동기화
+        const q = query(collection(db, 'consultations'), orderBy('createdAt', 'desc'));
+        unsubscribeConsult = onSnapshot(q, (querySnapshot) => {
+          const list: Consultation[] = [];
+          querySnapshot.forEach((doc) => list.push({ id: doc.id, ...doc.data() } as Consultation));
+          setConsultations(list);
+        });
+
+      } catch (e) {
+        console.error("Firebase 연결 프로세스 오류:", e);
+        setIsLoading(false);
+      }
+    } else {
+      // Firebase가 없을 경우 로컬 데이터 로드
+      const savedNews = localStorage.getItem(STORAGE_KEYS.NEWS);
+      const savedProducts = localStorage.getItem(STORAGE_KEYS.PRODUCTS);
+      const savedCases = localStorage.getItem(STORAGE_KEYS.CASES);
+      const savedConsults = localStorage.getItem(STORAGE_KEYS.CONSULTATIONS);
+
+      if (savedNews) setNews(JSON.parse(savedNews));
+      if (savedProducts) setProducts(JSON.parse(savedProducts));
+      if (savedCases) setCases(JSON.parse(savedCases));
+      if (savedConsults) setConsultations(JSON.parse(savedConsults));
+      
+      setIsLoading(false);
+    }
+
+    return () => { 
+      if (unsubscribeMaster) unsubscribeMaster(); 
+      if (unsubscribeConsult) unsubscribeConsult();
+    };
+  }, [settings.firebaseConfig?.projectId]);
 
   const handleConsultationSubmit = async (data: Omit<Consultation, 'id' | 'createdAt'>) => {
-    const newEntry: Consultation = {
+    const newEntry = {
       ...data,
-      id: Date.now().toString(),
       createdAt: new Date().toLocaleString(),
     };
     
-    // 1. 브라우저 저장
-    const updated = [newEntry, ...consultations];
-    setConsultations(updated);
-    localStorage.setItem(STORAGE_KEYS.CONSULTATIONS, JSON.stringify(updated));
-
-    // 2. 구글 스프레드시트 연동 전송
-    if (settings.googleSheetsUrl) {
+    // Firebase 전송
+    if (settings.firebaseConfig?.projectId) {
       try {
-        await fetch(settings.googleSheetsUrl, {
-          method: 'POST',
-          mode: 'no-cors', // Apps Script 웹앱 CORS 대응
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(newEntry)
-        });
-      } catch (e) { console.error('Google Sheets 연동 실패:', e); }
+        const app = getFirebaseApp(settings.firebaseConfig);
+        if (app) {
+          const db = getFirestore(app);
+          await addDoc(collection(db, 'consultations'), newEntry);
+        }
+      } catch (e) {
+        console.error('Firebase 상담 저장 실패:', e);
+      }
+    } else {
+      // 로컬 전송
+      const localEntry = { ...newEntry, id: Date.now().toString() };
+      const updated = [localEntry, ...consultations];
+      setConsultations(updated);
+      localStorage.setItem(STORAGE_KEYS.CONSULTATIONS, JSON.stringify(updated));
     }
 
-    // 3. 기존 웹훅(디스코드 등) 전송
+    // 기타 연동 (Sheets, Webhook)
+    if (settings.googleSheetsUrl) {
+      fetch(settings.googleSheetsUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify(newEntry) });
+    }
     if (settings.webhookUrl) {
-      try {
-        await fetch(settings.webhookUrl, {
-          method: 'POST',
-          mode: 'no-cors',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            content: `🔔 **신규 상담 신청**\n매장명: ${newEntry.storeName}\n고객명: ${newEntry.customerName}\n연락처: ${newEntry.phoneNumber}\n관심사: ${newEntry.interests.join(', ')}`
-          })
-        });
-      } catch (e) { console.error('Webhook 연동 실패:', e); }
+      fetch(settings.webhookUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ content: `🔔 **신규 상담 신청**\n매장명: ${newEntry.storeName}\n고객명: ${newEntry.customerName}` }) });
     }
     
     setShowSuccessModal(true);
@@ -145,11 +171,21 @@ const App: React.FC = () => {
     if (password === '8999') {
       setIsAdmin(true);
       setShowAdminLogin(false);
-      window.scrollTo(0, 0);
     } else {
       alert('비밀번호가 올바르지 않습니다.');
     }
   };
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-brandDark flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-brandHighlight border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-white font-black italic tracking-widest animate-pulse uppercase">Syncing Cloud Data...</p>
+        </div>
+      </div>
+    );
+  }
 
   if (isAdmin) {
     return (
@@ -170,9 +206,7 @@ const App: React.FC = () => {
       <main className="flex-grow">
         <Hero settings={settings} />
         <div className="marquee-container">
-          <div className="animate-marquee">
-            {settings.announcement} &nbsp; &nbsp; &nbsp; &nbsp; {settings.announcement}
-          </div>
+          <div className="animate-marquee">{settings.announcement} &nbsp; &nbsp; &nbsp; &nbsp; {settings.announcement}</div>
         </div>
         <ProductSection products={products} />
         <InstallationSection cases={cases} />

@@ -1,6 +1,8 @@
 
 import React, { useState, useRef } from 'react';
-import { SiteSettings, NewsPost, Consultation, Product, InstallationCase } from '../types';
+import { initializeApp, getApps, getApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+import { getFirestore, doc, setDoc } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+import { SiteSettings, NewsPost, Consultation, Product, InstallationCase, FirebaseConfig } from '../types';
 import { STORAGE_KEYS } from '../App';
 
 interface AdminPanelProps {
@@ -16,6 +18,21 @@ interface AdminPanelProps {
   onLogout: () => void;
 }
 
+const COMMON_ICONS = [
+  'fa-solid fa-tablet-screen-button',
+  'fa-solid fa-robot',
+  'fa-solid fa-wifi',
+  'fa-solid fa-video',
+  'fa-solid fa-desktop',
+  'fa-solid fa-microchip',
+  'fa-solid fa-network-wired',
+  'fa-solid fa-bell',
+  'fa-solid fa-shield-halved',
+  'fa-solid fa-print',
+  'fa-solid fa-credit-card',
+  'fa-solid fa-mobile-screen'
+];
+
 export const AdminPanel: React.FC<AdminPanelProps> = ({ 
   settings, setSettings, news, setNews, products, setProducts, cases, setCases, consultations, onLogout 
 }) => {
@@ -23,79 +40,52 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [editingNews, setEditingNews] = useState<Partial<NewsPost> | null>(null);
   const [editingProduct, setEditingProduct] = useState<Partial<Product> | null>(null);
   const [editingCase, setEditingCase] = useState<Partial<InstallationCase> | null>(null);
-  const importFileRef = useRef<HTMLInputElement>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const compressImage = (base64Str: string, maxWidth = 1200, quality = 0.7): Promise<string> => {
-    return new Promise((resolve) => {
-      const img = new Image();
-      img.src = base64Str;
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        let width = img.width;
-        let height = img.height;
-        if (width > maxWidth) {
-          height = (maxWidth / width) * height;
-          width = maxWidth;
-        }
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        ctx?.drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL('image/jpeg', quality));
-      };
-    });
+  const getFirebaseApp = (config: any) => {
+    return getApps().length > 0 ? getApp() : initializeApp(config);
   };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, callback: (url: string) => void) => {
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>, setter: (url: string) => void) => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
-      reader.onloadend = async () => {
-        const compressed = await compressImage(reader.result as string);
-        callback(compressed);
+      reader.onloadend = () => {
+        setter(reader.result as string);
       };
       reader.readAsDataURL(file);
     }
   };
 
-  const handleGlobalSave = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
+  const handleGlobalSave = async () => {
+    setIsSaving(true);
     try {
       localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
       localStorage.setItem(STORAGE_KEYS.NEWS, JSON.stringify(news));
       localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(products));
       localStorage.setItem(STORAGE_KEYS.CASES, JSON.stringify(cases));
-      alert('모든 설정이 브라우저에 영구 저장되었습니다.');
-    } catch (err) {
-      alert('저장 용량이 부족합니다. 이미지 크기를 줄여주세요.');
+
+      if (settings.firebaseConfig?.projectId) {
+        const app = getFirebaseApp(settings.firebaseConfig);
+        const db = getFirestore(app);
+        await setDoc(doc(db, 'site', 'master_data'), {
+          settings,
+          news,
+          products,
+          cases,
+          updatedAt: new Date().toISOString()
+        });
+        alert('클라우드 서버에 동기화되었습니다.');
+      } else {
+        alert('로컬에 저장되었습니다.');
+      }
+    } catch (err: any) {
+      alert('저장 실패: ' + err.message);
+    } finally {
+      setIsSaving(false);
     }
-  };
-
-  const handleExportData = () => {
-    const data = { settings, news, products, cases };
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `deungchon_backup_${new Date().toISOString().split('T')[0]}.json`;
-    link.click();
-  };
-
-  const handleImportData = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      try {
-        const data = JSON.parse(event.target?.result as string);
-        if (data.settings) setSettings(data.settings);
-        if (data.news) setNews(data.news);
-        if (data.products) setProducts(data.products);
-        if (data.cases) setCases(data.cases);
-        alert('백업 데이터를 불러왔습니다. 반드시 상단의 전체 저장을 눌러주세요.');
-      } catch (err) { alert('파일이 유효하지 않습니다.'); }
-    };
-    reader.readAsText(file);
   };
 
   const moveProduct = (index: number, direction: 'up' | 'down') => {
@@ -120,65 +110,59 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   return (
     <div className="min-h-screen bg-gray-50 flex">
       <aside className="w-64 bg-brandDark text-white fixed h-full z-10 overflow-y-auto">
-        <button 
-          onClick={onLogout}
-          className="w-full text-left p-8 border-b border-white/5 hover:bg-white/5 transition-colors group"
-        >
-          <div className="text-xl font-black italic text-brandPrimary flex items-center gap-2">
-            KT <span className="text-white">Admin</span>
-            <i className="fa-solid fa-house text-[10px] text-white/20 group-hover:text-brandPrimary transition-colors"></i>
-          </div>
-          <div className="text-[10px] text-gray-500 uppercase tracking-widest mt-1">Exit to Homepage</div>
+        <button onClick={onLogout} className="w-full text-left p-8 border-b border-white/5 hover:bg-white/5 transition-colors group">
+          <div className="text-xl font-black italic text-brandPrimary flex items-center gap-2">KT <span className="text-white">Admin</span></div>
+          <div className="text-[10px] text-gray-500 uppercase tracking-widest mt-1 italic">V4 Cloud Synced</div>
         </button>
-
         <nav className="p-4 space-y-1">
           {TABS.map(tab => (
-            <button 
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id as any)} 
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all ${activeTab === tab.id ? 'bg-brandPrimary text-white shadow-lg font-bold' : 'hover:bg-white/5 text-gray-400'}`}
-            >
+            <button key={tab.id} onClick={() => setActiveTab(tab.id as any)} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all ${activeTab === tab.id ? 'bg-brandPrimary text-white shadow-lg font-bold' : 'hover:bg-white/5 text-gray-400'}`}>
               <i className={`fa-solid ${tab.icon} w-5`}></i> {tab.label}
             </button>
           ))}
         </nav>
-        <div className="p-4 absolute bottom-0 w-full">
-           <button onClick={onLogout} className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-white/5 hover:bg-white/10 rounded-lg text-gray-400 transition-colors text-sm font-bold">
-            <i className="fa-solid fa-arrow-right-from-bracket"></i> 로그아웃
-          </button>
-        </div>
       </aside>
 
       <main className="ml-64 flex-grow p-10">
         <header className="mb-10 flex justify-between items-center">
-          <h1 className="text-3xl font-black text-brandDark">{TABS.find(t => t.id === activeTab)?.label}</h1>
-          {['content', 'buttons', 'products', 'news', 'cases', 'footer', 'integration'].includes(activeTab) && (
-            <button 
-              onClick={() => handleGlobalSave()} 
-              className="px-8 py-3 bg-brandPrimary text-white font-black rounded-xl shadow-lg hover:brightness-110 active:scale-95 transition-all flex items-center gap-2"
-            >
-              <i className="fa-solid fa-floppy-disk"></i> 전체 변경 사항 저장
-            </button>
-          )}
+          <h1 className="text-3xl font-black text-brandDark italic tracking-tighter uppercase">{TABS.find(t => t.id === activeTab)?.label} Settings</h1>
+          <button 
+            disabled={isSaving}
+            onClick={handleGlobalSave} 
+            className="px-8 py-3 bg-brandPrimary text-white font-black rounded-xl shadow-lg hover:brightness-110 flex items-center gap-2 active:scale-95 transition-all"
+          >
+            {isSaving ? <i className="fa-solid fa-spinner animate-spin"></i> : <i className="fa-solid fa-cloud-arrow-up"></i>}
+            전체 저장 및 배포
+          </button>
         </header>
 
         {activeTab === 'content' && (
           <div className="bg-white rounded-3xl p-10 max-w-4xl space-y-8 shadow-sm border border-gray-100">
              <div>
               <label className="block text-xs font-black text-gray-400 uppercase tracking-widest mb-3">띠배너 내용</label>
-              <input type="text" value={settings.announcement} onChange={e => setSettings({...settings, announcement: e.target.value})} className="w-full p-4 bg-gray-50 border-0 rounded-xl outline-none font-bold" />
+              <input type="text" value={settings.announcement} onChange={e => setSettings({...settings, announcement: e.target.value})} className="w-full p-4 bg-gray-50 border-0 rounded-xl font-bold outline-none focus:ring-2 focus:ring-brandPrimary/10" />
             </div>
-            <div className="grid grid-cols-2 gap-8 pt-4">
+            <div className="grid grid-cols-2 gap-8">
               <div className="space-y-6">
-                <label className="block text-xs font-black text-gray-400 uppercase tracking-widest">히어로 타이틀 & 서브</label>
-                <input type="text" placeholder="히어로 제목" value={settings.heroTitle} onChange={e => setSettings({...settings, heroTitle: e.target.value})} className="w-full p-4 bg-gray-50 border-0 rounded-xl font-bold" />
-                <textarea rows={4} placeholder="히어로 부제목" value={settings.heroSubtitle} onChange={e => setSettings({...settings, heroSubtitle: e.target.value})} className="w-full p-4 bg-gray-50 border-0 rounded-xl" />
+                <label className="block text-xs font-black text-gray-400 uppercase tracking-widest">히어로 영역</label>
+                <input type="text" placeholder="제목" value={settings.heroTitle} onChange={e => setSettings({...settings, heroTitle: e.target.value})} className="w-full p-4 bg-gray-50 border-0 rounded-xl font-black text-xl outline-none" />
+                <textarea rows={4} placeholder="부제목" value={settings.heroSubtitle} onChange={e => setSettings({...settings, heroSubtitle: e.target.value})} className="w-full p-4 bg-gray-50 border-0 rounded-xl outline-none" />
               </div>
-              <div className="space-y-4">
-                <label className="block text-xs font-black text-gray-400 uppercase tracking-widest">히어로 배경 이미지</label>
-                <div className="border-2 border-dashed border-gray-200 rounded-2xl p-6 text-center bg-gray-50/50">
-                   {settings.heroImageUrl && <img src={settings.heroImageUrl} className="h-40 w-full object-cover rounded-xl mb-4 shadow-md" />}
-                   <input type="file" accept="image/*" onChange={e => handleFileUpload(e, (url) => setSettings({...settings, heroImageUrl: url}))} className="text-xs" />
+              <div>
+                <label className="block text-xs font-black text-gray-400 uppercase tracking-widest mb-3">이미지 설정</label>
+                <div className="space-y-4">
+                  <input type="text" placeholder="이미지 URL" value={settings.heroImageUrl} onChange={e => setSettings({...settings, heroImageUrl: e.target.value})} className="w-full p-4 bg-gray-50 border-0 rounded-xl text-xs" />
+                  <div className="relative group">
+                    {settings.heroImageUrl ? (
+                      <img src={settings.heroImageUrl} className="w-full h-40 object-cover rounded-xl shadow-sm" />
+                    ) : (
+                      <div className="w-full h-40 bg-gray-100 rounded-xl flex items-center justify-center text-gray-300">No Image</div>
+                    )}
+                    <label className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 group-hover:opacity-100 rounded-xl cursor-pointer transition-opacity">
+                      <span className="text-white font-bold text-sm">이미지 업로드</span>
+                      <input type="file" className="hidden" accept="image/*" onChange={e => handleImageUpload(e, (url) => setSettings({...settings, heroImageUrl: url}))} />
+                    </label>
+                  </div>
                 </div>
               </div>
             </div>
@@ -187,58 +171,47 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
         {activeTab === 'buttons' && (
           <div className="bg-white rounded-3xl p-10 max-w-4xl space-y-8 shadow-sm border border-gray-100">
-            <h2 className="text-xl font-black text-brandDark italic mb-6">Button Labels</h2>
             <div className="grid grid-cols-2 gap-6">
-              <div>
-                <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">상단 네비 상담버튼</label>
-                <input type="text" value={settings.buttonLabels.navConsultation} onChange={e => setSettings({...settings, buttonLabels: {...settings.buttonLabels, navConsultation: e.target.value}})} className="w-full p-4 bg-gray-50 border-0 rounded-xl font-bold" />
-              </div>
-              <div>
-                <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">히어로 메인 상담버튼</label>
-                <input type="text" value={settings.buttonLabels.heroConsultation} onChange={e => setSettings({...settings, buttonLabels: {...settings.buttonLabels, heroConsultation: e.target.value}})} className="w-full p-4 bg-gray-50 border-0 rounded-xl font-bold" />
-              </div>
-              <div>
-                <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">상담폼 제출버튼</label>
-                <input type="text" value={settings.buttonLabels.submitConsultation} onChange={e => setSettings({...settings, buttonLabels: {...settings.buttonLabels, submitConsultation: e.target.value}})} className="w-full p-4 bg-gray-50 border-0 rounded-xl font-bold" />
-              </div>
+              {[
+                { label: '상단 네비 상담 버튼', key: 'navConsultation' },
+                { label: '히어로 메인 버튼', key: 'heroConsultation' },
+                { label: '상담 폼 제출 버튼', key: 'submitConsultation' },
+                { label: '상품 자세히보기 버튼', key: 'heroSolutions' },
+              ].map(item => (
+                <div key={item.key}>
+                  <label className="block text-xs font-black text-gray-400 uppercase mb-2">{item.label}</label>
+                  <input 
+                    type="text" 
+                    value={(settings.buttonLabels as any)[item.key]} 
+                    onChange={e => setSettings({...settings, buttonLabels: {...settings.buttonLabels, [item.key]: e.target.value}})} 
+                    className="w-full p-4 bg-gray-50 border-0 rounded-xl font-bold outline-none" 
+                  />
+                </div>
+              ))}
             </div>
           </div>
         )}
 
         {activeTab === 'products' && (
           <div className="space-y-6">
-            <div className="flex justify-between items-center">
-              <button onClick={() => setEditingProduct({})} className="bg-brandDark text-brandHighlight px-8 py-4 rounded-xl font-black shadow-lg flex items-center gap-2">
-                <i className="fa-solid fa-plus"></i> 새 상품 등록
-              </button>
-              <span className="text-xs font-bold text-gray-400 italic">* 상품 옆 화살표로 진열 순서를 바꿀 수 있습니다.</span>
-            </div>
+            <button onClick={() => setEditingProduct({ icon: 'fa-solid fa-tablet-screen-button' })} className="bg-brandDark text-brandHighlight px-8 py-4 rounded-xl font-black shadow-lg hover:bg-black transition-all"><i className="fa-solid fa-plus mr-2"></i> 새 상품 추가</button>
             <div className="bg-white rounded-3xl shadow-sm border border-gray-100 divide-y overflow-hidden">
               {products.map((p, index) => (
                 <div key={p.id} className="p-6 flex justify-between items-center hover:bg-gray-50 transition-colors">
                   <div className="flex gap-6 items-center">
                     <div className="flex flex-col gap-1">
-                      <button 
-                        disabled={index === 0}
-                        onClick={() => moveProduct(index, 'up')}
-                        className={`p-1 rounded hover:bg-gray-200 transition-colors ${index === 0 ? 'opacity-10 cursor-not-allowed' : 'text-brandDark'}`}
-                      >
-                        <i className="fa-solid fa-caret-up"></i>
-                      </button>
-                      <button 
-                        disabled={index === products.length - 1}
-                        onClick={() => moveProduct(index, 'down')}
-                        className={`p-1 rounded hover:bg-gray-200 transition-colors ${index === products.length - 1 ? 'opacity-10 cursor-not-allowed' : 'text-brandDark'}`}
-                      >
-                        <i className="fa-solid fa-caret-down"></i>
-                      </button>
+                      <button onClick={() => moveProduct(index, 'up')} className="text-gray-300 hover:text-brandPrimary"><i className="fa-solid fa-caret-up"></i></button>
+                      <button onClick={() => moveProduct(index, 'down')} className="text-gray-300 hover:text-brandPrimary"><i className="fa-solid fa-caret-down"></i></button>
+                    </div>
+                    <div className="w-16 h-16 bg-gray-50 rounded-2xl flex items-center justify-center text-brandPrimary shadow-inner">
+                      <i className={`${p.icon} text-xl`}></i>
                     </div>
                     <img src={p.image} className="w-20 h-20 object-cover rounded-2xl shadow-sm" />
                     <div className="font-black text-brandDark text-lg">{p.name}</div>
                   </div>
-                  <div className="flex gap-4">
-                    <button onClick={() => setEditingProduct(p)} className="px-4 py-2 bg-gray-100 text-brandDark rounded-lg font-bold hover:bg-gray-200 transition-colors">수정</button>
-                    <button onClick={() => { if(confirm('삭제하시겠습니까?')) setProducts(products.filter(x => x.id !== p.id)); }} className="px-4 py-2 bg-red-50 text-brandPrimary rounded-lg font-bold hover:bg-red-100 transition-colors">삭제</button>
+                  <div className="flex gap-3">
+                    <button onClick={() => setEditingProduct(p)} className="px-4 py-2 bg-gray-100 rounded-lg font-bold hover:bg-gray-200">수정</button>
+                    <button onClick={() => setProducts(products.filter(x => x.id !== p.id))} className="px-4 py-2 bg-red-50 text-brandPrimary rounded-lg font-bold hover:bg-red-100">삭제</button>
                   </div>
                 </div>
               ))}
@@ -248,19 +221,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
         {activeTab === 'news' && (
           <div className="space-y-6">
-            <button onClick={() => setEditingNews({})} className="bg-brandDark text-brandHighlight px-8 py-4 rounded-xl font-black shadow-lg flex items-center gap-2">
-              <i className="fa-solid fa-plus"></i> 새 게시글 작성
-            </button>
+            <button onClick={() => setEditingNews({})} className="bg-brandDark text-brandHighlight px-8 py-4 rounded-xl font-black shadow-lg hover:bg-black transition-all"><i className="fa-solid fa-plus mr-2"></i> 새 소식 작성</button>
             <div className="bg-white rounded-3xl shadow-sm border border-gray-100 divide-y overflow-hidden">
               {news.map(n => (
                 <div key={n.id} className="p-6 flex justify-between items-center hover:bg-gray-50 transition-colors">
                   <div className="flex gap-6 items-center">
-                    <img src={n.imageUrl} className="w-20 h-20 object-cover rounded-2xl shadow-sm" />
-                    <div className="font-black text-brandDark text-lg">{n.title}</div>
+                    <img src={n.imageUrl} className="w-20 h-20 object-cover rounded-2xl" />
+                    <div>
+                      <div className="font-black text-brandDark">{n.title}</div>
+                      <div className="text-xs text-gray-400">{n.date}</div>
+                    </div>
                   </div>
-                  <div className="flex gap-4">
-                    <button onClick={() => setEditingNews(n)} className="px-4 py-2 bg-gray-100 text-brandDark rounded-lg font-bold hover:bg-gray-200 transition-colors">수정</button>
-                    <button onClick={() => { if(confirm('삭제하시겠습니까?')) setNews(news.filter(x => x.id !== n.id)); }} className="px-4 py-2 bg-red-50 text-brandPrimary rounded-lg font-bold hover:bg-red-100 transition-colors">삭제</button>
+                  <div className="flex gap-3">
+                    <button onClick={() => setEditingNews(n)} className="px-4 py-2 bg-gray-100 rounded-lg font-bold">수정</button>
+                    <button onClick={() => setNews(news.filter(x => x.id !== n.id))} className="px-4 py-2 bg-red-50 text-brandPrimary rounded-lg font-bold">삭제</button>
                   </div>
                 </div>
               ))}
@@ -270,20 +244,39 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
         {activeTab === 'cases' && (
           <div className="space-y-6">
-            <button onClick={() => setEditingCase({})} className="bg-brandDark text-brandHighlight px-8 py-4 rounded-xl font-black shadow-lg flex items-center gap-2">
-              <i className="fa-solid fa-camera"></i> 새 설치 사례 추가
-            </button>
+            <button onClick={() => setEditingCase({})} className="bg-brandDark text-brandHighlight px-8 py-4 rounded-xl font-black shadow-lg hover:bg-black transition-all"><i className="fa-solid fa-camera mr-2"></i> 설치 사례 추가</button>
             <div className="bg-white rounded-3xl shadow-sm border border-gray-100 divide-y overflow-hidden">
               {cases.map(c => (
                 <div key={c.id} className="p-6 flex justify-between items-center hover:bg-gray-50 transition-colors">
                   <div className="flex gap-6 items-center">
-                    <img src={c.imageUrl} className="w-20 h-20 object-cover rounded-2xl shadow-sm" />
-                    <div className="font-black text-brandDark text-lg">{c.storeName}</div>
+                    <img src={c.imageUrl} className="w-20 h-20 object-cover rounded-2xl" />
+                    <div className="font-black text-brandDark">{c.storeName}</div>
                   </div>
-                  <div className="flex gap-4">
-                    <button onClick={() => setEditingCase(c)} className="px-4 py-2 bg-gray-100 text-brandDark rounded-lg font-bold hover:bg-gray-200 transition-colors">수정</button>
-                    <button onClick={() => { if(confirm('삭제하시겠습니까?')) setCases(cases.filter(x => x.id !== c.id)); }} className="px-4 py-2 bg-red-50 text-brandPrimary rounded-lg font-bold hover:bg-red-100 transition-colors">삭제</button>
+                  <div className="flex gap-3">
+                    <button onClick={() => setEditingCase(c)} className="px-4 py-2 bg-gray-100 rounded-lg font-bold">수정</button>
+                    <button onClick={() => setCases(cases.filter(x => x.id !== c.id))} className="px-4 py-2 bg-red-50 text-brandPrimary rounded-lg font-bold">삭제</button>
                   </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'footer' && (
+          <div className="bg-white rounded-3xl p-10 max-w-4xl space-y-8 shadow-sm border border-gray-100">
+            <div>
+              <label className="block text-xs font-black text-gray-400 uppercase mb-2">푸터 설명 문구</label>
+              <textarea rows={3} value={settings.footer.description} onChange={e => setSettings({...settings, footer: {...settings.footer, description: e.target.value}})} className="w-full p-4 bg-gray-50 border-0 rounded-xl outline-none" />
+            </div>
+            <div className="grid grid-cols-3 gap-6">
+              {[
+                { label: '대표 상담번호', key: 'supportPhone' },
+                { label: '하이오더 AS', key: 'hqPhone' },
+                { label: '기타 AS', key: 'faultPhone' },
+              ].map(item => (
+                <div key={item.key}>
+                  <label className="block text-xs font-black text-gray-400 uppercase mb-2">{item.label}</label>
+                  <input type="text" value={(settings.footer as any)[item.key]} onChange={e => setSettings({...settings, footer: {...settings.footer, [item.key]: e.target.value}})} className="w-full p-4 bg-gray-50 border-0 rounded-xl font-bold" />
                 </div>
               ))}
             </div>
@@ -297,26 +290,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                  <tr className="border-b border-gray-100 text-gray-400 font-black uppercase text-[10px] tracking-widest">
                    <th className="pb-4 px-4">접수 일시</th>
                    <th className="pb-4 px-4">매장명</th>
-                   <th className="pb-4 px-4">고객 성함</th>
+                   <th className="pb-4 px-4">고객성함</th>
                    <th className="pb-4 px-4">연락처</th>
                    <th className="pb-4 px-4">관심사</th>
                  </tr>
                </thead>
                <tbody className="divide-y divide-gray-50">
                  {consultations.length === 0 ? (
-                   <tr><td colSpan={5} className="py-20 text-center text-gray-300 font-bold uppercase tracking-widest">접수된 상담 내역이 없습니다.</td></tr>
+                   <tr><td colSpan={5} className="py-20 text-center text-gray-300 font-bold uppercase tracking-widest italic">No data yet.</td></tr>
                  ) : (
                    consultations.map(c => (
                      <tr key={c.id} className="hover:bg-gray-50 transition-colors">
-                       <td className="py-5 px-4 text-xs text-gray-400 font-bold">{c.createdAt}</td>
+                       <td className="py-5 px-4 text-xs font-bold text-gray-400">{c.createdAt}</td>
                        <td className="py-5 px-4 font-black">{c.storeName}</td>
-                       <td className="py-5 px-4 font-bold text-gray-600">{c.customerName}</td>
+                       <td className="py-5 px-4 font-bold">{c.customerName}</td>
                        <td className="py-5 px-4 font-black">{c.phoneNumber}</td>
-                       <td className="py-5 px-4">
-                          <div className="flex flex-wrap gap-1">
-                            {c.interests.map(i => <span key={i} className="bg-brandHighlight/10 text-brandHighlight px-2 py-0.5 rounded text-[10px] font-bold">{i}</span>)}
-                          </div>
-                       </td>
+                       <td className="py-5 px-4 text-xs font-bold text-brandPrimary uppercase">{c.interests.join(', ')}</td>
                      </tr>
                    ))
                  )}
@@ -325,109 +314,41 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
            </div>
         )}
 
-        {activeTab === 'footer' && (
-          <div className="bg-white rounded-3xl p-10 max-w-4xl space-y-8 shadow-sm border border-gray-100">
-            <h2 className="text-xl font-black text-brandDark italic mb-6">Footer Settings</h2>
-            <div>
-              <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">푸터 공지 문구</label>
-              <textarea rows={3} value={settings.footer.description} onChange={e => setSettings({...settings, footer: {...settings.footer, description: e.target.value}})} className="w-full p-4 bg-gray-50 border-0 rounded-xl" />
-            </div>
-            <div className="grid grid-cols-3 gap-6">
-              <div>
-                <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">대표 상담 번호</label>
-                <input type="text" value={settings.footer.supportPhone} onChange={e => setSettings({...settings, footer: {...settings.footer, supportPhone: e.target.value}})} className="w-full p-4 bg-gray-50 border-0 rounded-xl font-bold" />
-              </div>
-              <div>
-                <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">하이오더 AS 번호</label>
-                <input type="text" value={settings.footer.hqPhone} onChange={e => setSettings({...settings, footer: {...settings.footer, hqPhone: e.target.value}})} className="w-full p-4 bg-gray-50 border-0 rounded-xl" />
-              </div>
-              <div>
-                <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">기타 장애 신고 번호</label>
-                <input type="text" value={settings.footer.faultPhone} onChange={e => setSettings({...settings, footer: {...settings.footer, faultPhone: e.target.value}})} className="w-full p-4 bg-gray-50 border-0 rounded-xl" />
-              </div>
-            </div>
-          </div>
-        )}
-
         {activeTab === 'integration' && (
            <div className="bg-white rounded-3xl p-10 max-w-4xl space-y-10 shadow-sm border border-gray-100">
-             <div className="space-y-8">
-               <h3 className="text-xl font-black text-brandDark italic border-b pb-2">Automation & Data Sync</h3>
-               
-               <div>
-                 <div className="flex items-center gap-2 mb-2">
-                   <i className="fa-brands fa-google text-green-600"></i>
-                   <label className="block text-xs font-black text-gray-400 uppercase tracking-widest">Google Spreadsheet API URL (웹 앱)</label>
-                 </div>
-                 <input 
-                   type="text" 
-                   placeholder="https://script.google.com/macros/s/.../exec" 
-                   value={settings.googleSheetsUrl} 
-                   onChange={e => setSettings({...settings, googleSheetsUrl: e.target.value})} 
-                   className="w-full p-4 bg-gray-50 border-0 rounded-xl font-mono text-xs focus:ring-2 focus:ring-green-500/20" 
-                 />
-                 <p className="mt-2 text-[10px] text-gray-400 leading-relaxed font-medium">
-                   * 구글 스프레드시트의 '도구 &gt; 스크립트 에디터'에서 웹 앱으로 배포한 URL을 입력하세요.<br />
-                   상담 신청 시 자동으로 시트의 새로운 행으로 데이터가 추가됩니다.
-                 </p>
-               </div>
-
-               <div className="pt-4 border-t border-gray-50">
-                 <div className="flex items-center gap-2 mb-2">
-                   <i className="fa-solid fa-bell text-indigo-500"></i>
-                   <label className="block text-xs font-black text-gray-400 uppercase tracking-widest">Discord/Slack Webhook URL</label>
-                 </div>
-                 <input 
-                   type="text" 
-                   placeholder="https://discord.com/api/webhooks/..." 
-                   value={settings.webhookUrl} 
-                   onChange={e => setSettings({...settings, webhookUrl: e.target.value})} 
-                   className="w-full p-4 bg-gray-50 border-0 rounded-xl font-mono text-xs focus:ring-2 focus:ring-indigo-500/20" 
-                 />
+             <div className="p-8 bg-blue-50/50 rounded-3xl border border-blue-100">
+               <h3 className="text-xl font-black mb-6 flex items-center gap-2"><i className="fa-solid fa-cloud"></i> Firebase Cloud Sync</h3>
+               <div className="grid grid-cols-2 gap-4">
+                 {['apiKey', 'projectId', 'authDomain', 'appId'].map(field => (
+                   <div key={field}>
+                     <label className="block text-[10px] font-black text-gray-400 uppercase mb-2">{field}</label>
+                     <input 
+                       type="password" 
+                       value={(settings.firebaseConfig as any)?.[field] || ''} 
+                       onChange={e => setSettings({...settings, firebaseConfig: {...(settings.firebaseConfig || {} as FirebaseConfig), [field]: e.target.value}})}
+                       className="w-full p-4 bg-white border border-blue-100 rounded-xl text-xs font-mono" 
+                     />
+                   </div>
+                 ))}
                </div>
              </div>
-
-             <div className="pt-10 border-t border-gray-100 flex flex-col gap-6">
-               <h3 className="text-xl font-black text-brandDark italic">System Backup</h3>
-               <div className="flex gap-4">
-                 <button onClick={handleExportData} className="px-6 py-4 bg-brandDark text-brandHighlight rounded-xl font-black shadow-lg flex items-center gap-2">
-                   <i className="fa-solid fa-download"></i> 전체 데이터 백업
-                 </button>
-                 <input type="file" accept=".json" ref={importFileRef} onChange={handleImportData} className="hidden" />
-                 <button onClick={() => importFileRef.current?.click()} className="px-6 py-4 bg-white border-2 border-brandDark text-brandDark rounded-xl font-black hover:bg-gray-50 flex items-center gap-2">
-                   <i className="fa-solid fa-upload"></i> 데이터 복구 (JSON)
-                 </button>
+             <div className="grid grid-cols-2 gap-6">
+               <div>
+                 <label className="block text-xs font-black text-gray-400 uppercase mb-2">Google Sheets URL</label>
+                 <input type="text" value={settings.googleSheetsUrl} onChange={e => setSettings({...settings, googleSheetsUrl: e.target.value})} className="w-full p-4 bg-gray-50 border-0 rounded-xl text-xs" />
+               </div>
+               <div>
+                 <label className="block text-xs font-black text-gray-400 uppercase mb-2">Webhook URL</label>
+                 <input type="text" value={settings.webhookUrl} onChange={e => setSettings({...settings, webhookUrl: e.target.value})} className="w-full p-4 bg-gray-50 border-0 rounded-xl text-xs" />
                </div>
              </div>
            </div>
         )}
       </main>
 
-      {/* Modals remain same as previous version */}
-      {editingNews && (
-        <div className="fixed inset-0 z-[100] bg-brandDark/80 flex items-center justify-center p-4 backdrop-blur-md">
-          <form onSubmit={(e) => {
-            e.preventDefault();
-            const updated = editingNews.id 
-              ? news.map(n => n.id === editingNews.id ? ({...n, ...editingNews} as NewsPost) : n)
-              : [{...editingNews, id: Date.now().toString(), date: new Date().toISOString().split('T')[0]} as NewsPost, ...news];
-            setNews(updated);
-            setEditingNews(null);
-          }} className="bg-white p-10 rounded-3xl w-full max-w-xl space-y-6 animate-in zoom-in duration-200">
-            <h2 className="text-2xl font-black">게시글 편집</h2>
-            <input type="text" placeholder="제목" value={editingNews.title || ''} onChange={e => setEditingNews({...editingNews, title: e.target.value})} className="w-full p-4 bg-gray-50 border-0 rounded-xl" required />
-            <textarea placeholder="내용" value={editingNews.content || ''} onChange={e => setEditingNews({...editingNews, content: e.target.value})} className="w-full p-4 bg-gray-50 border-0 rounded-xl" rows={6} required />
-            <input type="file" accept="image/*" onChange={e => handleFileUpload(e, (url) => setEditingNews({...editingNews, imageUrl: url}))} className="text-xs" />
-            <div className="flex gap-3">
-              <button type="submit" className="flex-grow bg-brandPrimary text-white py-4 rounded-xl font-black">적용</button>
-              <button type="button" onClick={() => setEditingNews(null)} className="px-8 bg-gray-100 py-4 rounded-xl">취소</button>
-            </div>
-          </form>
-        </div>
-      )}
-
+      {/* Editing Modals */}
       {editingProduct && (
-        <div className="fixed inset-0 z-[100] bg-brandDark/80 flex items-center justify-center p-4 backdrop-blur-md">
+        <div className="fixed inset-0 z-[200] bg-brandDark/80 backdrop-blur-md flex items-center justify-center p-4">
           <form onSubmit={(e) => {
             e.preventDefault();
             const updated = editingProduct.id 
@@ -435,42 +356,122 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               : [{...editingProduct, id: Date.now().toString()} as Product, ...products];
             setProducts(updated);
             setEditingProduct(null);
-          }} className="bg-white p-10 rounded-3xl w-full max-w-xl space-y-6 animate-in zoom-in duration-200">
-            <h2 className="text-2xl font-black">상품 편집</h2>
-            <input type="text" placeholder="상품명" value={editingProduct.name || ''} onChange={e => setEditingProduct({...editingProduct, name: e.target.value})} className="w-full p-4 bg-gray-50 border-0 rounded-xl" required />
-            <textarea placeholder="상품 설명" value={editingProduct.description || ''} onChange={e => setEditingProduct({...editingProduct, description: e.target.value})} className="w-full p-4 bg-gray-50 border-0 rounded-xl" rows={4} required />
+          }} className="bg-white p-10 rounded-[40px] w-full max-w-xl space-y-6 max-h-[90vh] overflow-y-auto">
+            <h2 className="text-2xl font-black">상품 설정</h2>
+            
             <div className="grid grid-cols-2 gap-4">
-              <input type="text" placeholder="아이콘 (font-awesome)" value={editingProduct.icon || 'fa-solid fa-box'} onChange={e => setEditingProduct({...editingProduct, icon: e.target.value})} className="w-full p-4 bg-gray-50 border-0 rounded-xl" />
-              <div className="flex flex-col gap-2">
-                <label className="text-[10px] font-bold text-gray-400">상품 이미지</label>
-                <input type="file" accept="image/*" onChange={e => handleFileUpload(e, (url) => setEditingProduct({...editingProduct, image: url}))} className="text-xs" />
+              <div className="space-y-4">
+                <input type="text" placeholder="상품명" value={editingProduct.name || ''} onChange={e => setEditingProduct({...editingProduct, name: e.target.value})} className="w-full p-4 bg-gray-50 rounded-2xl font-bold" required />
+                <textarea placeholder="설명" value={editingProduct.description || ''} onChange={e => setEditingProduct({...editingProduct, description: e.target.value})} className="w-full p-4 bg-gray-50 rounded-2xl text-sm" rows={4} required />
+              </div>
+              <div className="space-y-4">
+                <div className="relative group aspect-square bg-gray-50 rounded-2xl overflow-hidden">
+                  {editingProduct.image ? (
+                    <img src={editingProduct.image} className="w-full h-full object-cover" />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-gray-300 font-bold">Image</div>
+                  )}
+                  <label className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 group-hover:opacity-100 cursor-pointer transition-opacity">
+                    <span className="text-white font-bold">사진 업로드</span>
+                    <input type="file" className="hidden" accept="image/*" onChange={e => handleImageUpload(e, (url) => setEditingProduct({...editingProduct, image: url}))} />
+                  </label>
+                </div>
+                <input type="text" placeholder="또는 이미지 URL" value={editingProduct.image || ''} onChange={e => setEditingProduct({...editingProduct, image: e.target.value})} className="w-full p-2 bg-gray-50 rounded-lg text-[10px]" />
               </div>
             </div>
-            <div className="flex gap-3 pt-4">
-              <button type="submit" className="flex-grow bg-brandPrimary text-white py-4 rounded-xl font-black">적용</button>
-              <button type="button" onClick={() => setEditingProduct(null)} className="px-8 bg-gray-100 py-4 rounded-xl">취소</button>
+
+            <div>
+              <label className="block text-xs font-black text-gray-400 uppercase mb-3">대표 아이콘 선택</label>
+              <div className="grid grid-cols-6 gap-2">
+                {COMMON_ICONS.map(icon => (
+                  <button 
+                    key={icon}
+                    type="button"
+                    onClick={() => setEditingProduct({...editingProduct, icon})}
+                    className={`h-12 rounded-xl flex items-center justify-center text-xl transition-all ${editingProduct.icon === icon ? 'bg-brandPrimary text-white shadow-lg scale-110' : 'bg-gray-50 text-gray-400 hover:bg-gray-100'}`}
+                  >
+                    <i className={icon}></i>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex gap-4 pt-4">
+              <button type="submit" className="flex-grow py-4 bg-brandPrimary text-white font-black rounded-2xl active:scale-95 transition-all">설정 적용</button>
+              <button type="button" onClick={() => setEditingProduct(null)} className="px-8 py-4 bg-gray-100 rounded-2xl font-bold">닫기</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {editingNews && (
+        <div className="fixed inset-0 z-[200] bg-brandDark/80 backdrop-blur-md flex items-center justify-center p-4">
+          <form onSubmit={(e) => {
+            e.preventDefault();
+            const updated = editingNews.id 
+              ? news.map(n => n.id === editingNews.id ? ({...n, ...editingNews} as NewsPost) : n)
+              : [{...editingNews, id: Date.now().toString(), date: new Date().toISOString().split('T')[0]} as NewsPost, ...news];
+            setNews(updated);
+            setEditingNews(null);
+          }} className="bg-white p-10 rounded-[40px] w-full max-w-xl space-y-6">
+            <h2 className="text-2xl font-black">게시글 작성</h2>
+            <div className="grid grid-cols-3 gap-6">
+              <div className="col-span-2 space-y-4">
+                <input type="text" placeholder="제목" value={editingNews.title || ''} onChange={e => setEditingNews({...editingNews, title: e.target.value})} className="w-full p-4 bg-gray-50 rounded-2xl font-bold" required />
+                <textarea placeholder="내용" value={editingNews.content || ''} onChange={e => setEditingNews({...editingNews, content: e.target.value})} className="w-full p-4 bg-gray-50 rounded-2xl" rows={6} required />
+              </div>
+              <div className="space-y-4 text-center">
+                <div className="relative group aspect-square bg-gray-100 rounded-2xl overflow-hidden mb-2">
+                  {editingNews.imageUrl ? (
+                    <img src={editingNews.imageUrl} className="w-full h-full object-cover" />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-gray-300"><i className="fa-solid fa-image text-3xl"></i></div>
+                  )}
+                  <label className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 group-hover:opacity-100 cursor-pointer transition-opacity">
+                    <span className="text-white text-xs font-bold">업로드</span>
+                    <input type="file" className="hidden" accept="image/*" onChange={e => handleImageUpload(e, (url) => setEditingNews({...editingNews, imageUrl: url}))} />
+                  </label>
+                </div>
+                <input type="text" placeholder="URL 직접 입력" value={editingNews.imageUrl || ''} onChange={e => setEditingNews({...editingNews, imageUrl: e.target.value})} className="w-full p-2 bg-gray-50 rounded-lg text-[9px]" />
+              </div>
+            </div>
+            <div className="flex gap-4 pt-4">
+              <button type="submit" className="flex-grow py-4 bg-brandPrimary text-white font-black rounded-2xl">저장하기</button>
+              <button type="button" onClick={() => setEditingNews(null)} className="px-8 py-4 bg-gray-100 rounded-2xl">취소</button>
             </div>
           </form>
         </div>
       )}
 
       {editingCase && (
-        <div className="fixed inset-0 z-[100] bg-brandDark/80 flex items-center justify-center p-4 backdrop-blur-md">
+        <div className="fixed inset-0 z-[200] bg-brandDark/80 backdrop-blur-md flex items-center justify-center p-4">
           <form onSubmit={(e) => {
             e.preventDefault();
             const updated = editingCase.id 
               ? cases.map(c => c.id === editingCase.id ? ({...c, ...editingCase} as InstallationCase) : c)
-              : [{...editingCase, id: Date.now().toString(), installedSolutions: [], linkUrl: editingCase.linkUrl || '#'} as InstallationCase, ...cases];
+              : [{...editingCase, id: Date.now().toString(), installedSolutions: []} as InstallationCase, ...cases];
             setCases(updated);
             setEditingCase(null);
-          }} className="bg-white p-10 rounded-3xl w-full max-w-xl space-y-6 animate-in zoom-in duration-200">
-            <h2 className="text-2xl font-black">설치 사례 편집</h2>
-            <input type="text" placeholder="지점명" value={editingCase.storeName || ''} onChange={e => setEditingCase({...editingCase, storeName: e.target.value})} className="w-full p-4 bg-gray-50 border-0 rounded-xl font-bold" required />
-            <input type="text" placeholder="링크 URL" value={editingCase.linkUrl || ''} onChange={e => setEditingCase({...editingCase, linkUrl: e.target.value})} className="w-full p-4 bg-gray-50 border-0 rounded-xl" />
-            <input type="file" accept="image/*" onChange={e => handleFileUpload(e, (url) => setEditingCase({...editingCase, imageUrl: url}))} className="text-xs" />
-            <div className="flex gap-3">
-              <button type="submit" className="flex-grow bg-brandPrimary text-white py-4 rounded-xl font-black">적용</button>
-              <button type="button" onClick={() => setEditingCase(null)} className="px-8 bg-gray-100 py-4 rounded-xl">취소</button>
+          }} className="bg-white p-10 rounded-[40px] w-full max-w-sm space-y-6">
+            <h2 className="text-2xl font-black italic">CASE STUDY</h2>
+            <div className="space-y-6">
+              <div className="relative group aspect-video bg-gray-100 rounded-3xl overflow-hidden shadow-inner">
+                {editingCase.imageUrl ? (
+                  <img src={editingCase.imageUrl} className="w-full h-full object-cover" />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-gray-300"><i className="fa-solid fa-store text-4xl"></i></div>
+                )}
+                <label className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 group-hover:opacity-100 cursor-pointer transition-opacity">
+                  <span className="text-white font-black uppercase tracking-widest">Upload Photo</span>
+                  <input type="file" className="hidden" accept="image/*" onChange={e => handleImageUpload(e, (url) => setEditingCase({...editingCase, imageUrl: url}))} />
+                </label>
+              </div>
+              <input type="text" placeholder="매장명 (예: 등촌샤브 강남점)" value={editingCase.storeName || ''} onChange={e => setEditingCase({...editingCase, storeName: e.target.value})} className="w-full p-5 bg-gray-50 rounded-2xl font-black text-center" required />
+              <input type="text" placeholder="이미지 URL (직접 입력)" value={editingCase.imageUrl || ''} onChange={e => setEditingCase({...editingCase, imageUrl: e.target.value})} className="w-full p-3 bg-gray-50 rounded-xl text-[10px]" />
+            </div>
+            <div className="flex gap-4 pt-4">
+              <button type="submit" className="flex-grow py-5 bg-brandPrimary text-white font-black rounded-2xl shadow-lg">사례 등록</button>
+              <button type="button" onClick={() => setEditingCase(null)} className="px-8 py-5 bg-gray-100 rounded-2xl">닫기</button>
             </div>
           </form>
         </div>

@@ -1,4 +1,13 @@
 
+export interface FirebaseConfig {
+  apiKey: string;
+  authDomain: string;
+  projectId: string;
+  storageBucket: string;
+  messagingSenderId: string;
+  appId: string;
+}
+
 export interface SiteSettings {
   announcement: string;
   heroTitle: string;
@@ -17,7 +26,8 @@ export interface SiteSettings {
     faultPhone: string;
   };
   webhookUrl: string;
-  googleSheetsUrl: string; // 추가된 필드
+  googleSheetsUrl: string;
+  firebaseConfig?: FirebaseConfig; // Firebase 설정 추가
 }
 
 export interface Product {
