@@ -116,8 +116,8 @@ const App: React.FC = () => {
      Firebase Realtime Sync
   ========================= */
   useEffect(() => {
-    let unsubMaster: any;
-    let unsubConsult: any;
+    let unsubMaster: any = null;
+    let unsubConsult: any = null;
 
     if (hasFirebase) {
       const app = getFirebaseApp(firebaseConfig);
@@ -128,32 +128,72 @@ const App: React.FC = () => {
 
       const db = getFirestore(app);
 
-      // 메인 데이터
-      unsubMaster = onSnapshot(doc(db, 'site', 'master_data'), (snap) => {
-        if (snap.exists()) {
-          const data = snap.data();
-          if (data.settings) setSettings((prev) => ({ ...prev, ...data.settings }));
-          if (data.news) setNews(data.news);
-          if (data.products) setProducts(data.products);
-          if (data.cases) setCases(data.cases);
+      // 1) 설정 및 메인 데이터 실시간 동기화
+      unsubMaster = onSnapshot(
+        doc(db, 'site', 'master_data'),
+        (snap) => {
+          if (snap.exists()) {
+            const data: any = snap.data();
+            if (data.settings) setSettings((prev) => ({ ...prev, ...data.settings }));
+            if (data.news) setNews(data.news);
+            if (data.products) setProducts(data.products);
+            if (data.cases) setCases(data.cases);
+          }
+          setIsLoading(false);
+        },
+        (err) => {
+          console.error('Firestore 접근 오류(권한/Rules 확인):', err);
+          setIsLoading(false);
         }
-        setIsLoading(false);
-      });
+      );
 
-      // 상담 내역
+      // 2) 상담 내역 동기화 (createdAt Timestamp -> 문자열 변환)
       const q = query(collection(db, 'consultations'), orderBy('createdAt', 'desc'));
-      unsubConsult = onSnapshot(q, (qs) => {
-        const list: Consultation[] = [];
-        qs.forEach((d) => list.push({ id: d.id, ...d.data() } as Consultation));
-        setConsultations(list);
-      });
+      unsubConsult = onSnapshot(
+        q,
+        (qs) => {
+          const list: Consultation[] = [];
+
+          qs.forEach((d) => {
+            const raw: any = d.data();
+
+            // Firestore Timestamp -> 문자열로 변환 (React error #31 방지)
+            const createdAt =
+              raw.createdAt?.toDate
+                ? raw.createdAt.toDate().toLocaleString()
+                : (raw.createdAt ?? '');
+
+            list.push({
+              id: d.id,
+              ...raw,
+              createdAt, // 무조건 문자열
+            } as Consultation);
+          });
+
+          setConsultations(list);
+        },
+        (err) => {
+          console.error('상담 목록 로드 오류:', err);
+        }
+      );
     } else {
+      // Firebase가 없을 경우 로컬 데이터 로드(안전장치)
+      const savedNews = localStorage.getItem(STORAGE_KEYS.NEWS);
+      const savedProducts = localStorage.getItem(STORAGE_KEYS.PRODUCTS);
+      const savedCases = localStorage.getItem(STORAGE_KEYS.CASES);
+      const savedConsults = localStorage.getItem(STORAGE_KEYS.CONSULTATIONS);
+
+      if (savedNews) setNews(JSON.parse(savedNews));
+      if (savedProducts) setProducts(JSON.parse(savedProducts));
+      if (savedCases) setCases(JSON.parse(savedCases));
+      if (savedConsults) setConsultations(JSON.parse(savedConsults));
+
       setIsLoading(false);
     }
 
     return () => {
-      unsubMaster && unsubMaster();
-      unsubConsult && unsubConsult();
+      if (unsubMaster) unsubMaster();
+      if (unsubConsult) unsubConsult();
     };
   }, [firebaseConfig?.projectId]);
 
@@ -161,29 +201,51 @@ const App: React.FC = () => {
      상담 제출
   ========================= */
   const handleConsultationSubmit = async (data: Omit<Consultation, 'id' | 'createdAt'>) => {
-    const entry = {
+    // Firestore 저장용 (Timestamp)
+    const entryForFirestore = {
       ...data,
       createdAt: serverTimestamp(),
     };
 
+    // 외부 전송용 (문자열) - Sheets/Webhook에 Timestamp 객체 보내지 않기
+    const entryForSend = {
+      ...data,
+      createdAt: new Date().toLocaleString(),
+    };
+
+    // Firebase 저장
     if (hasFirebase) {
-      const app = getFirebaseApp(firebaseConfig);
-      if (app) {
-        const db = getFirestore(app);
-        await addDoc(collection(db, 'consultations'), entry);
+      try {
+        const app = getFirebaseApp(firebaseConfig);
+        if (app) {
+          const db = getFirestore(app);
+          await addDoc(collection(db, 'consultations'), entryForFirestore);
+        }
+      } catch (e) {
+        console.error('Firebase 상담 저장 실패:', e);
       }
+    } else {
+      // 로컬 저장(안전장치)
+      const localEntry: any = { ...entryForSend, id: Date.now().toString() };
+      const updated = [localEntry, ...consultations];
+      setConsultations(updated);
+      localStorage.setItem(STORAGE_KEYS.CONSULTATIONS, JSON.stringify(updated));
     }
 
+    // 기타 연동 (Sheets, Webhook)
     if (settings.googleSheetsUrl) {
-      fetch(settings.googleSheetsUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify(entry) });
+      fetch(settings.googleSheetsUrl, {
+        method: 'POST',
+        mode: 'no-cors',
+        body: JSON.stringify(entryForSend),
+      });
     }
-
     if (settings.webhookUrl) {
       fetch(settings.webhookUrl, {
         method: 'POST',
         mode: 'no-cors',
         body: JSON.stringify({
-          content: `🔔 신규 상담\n매장명: ${data.storeName}\n고객명: ${data.customerName}`,
+          content: `🔔 **신규 상담 신청**\n매장명: ${entryForSend.storeName}\n고객명: ${entryForSend.customerName}`,
         }),
       });
     }
@@ -208,8 +270,13 @@ const App: React.FC = () => {
   ========================= */
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-brandDark text-white">
-        Syncing Cloud Data...
+      <div className="min-h-screen bg-brandDark flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-brandHighlight border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-white font-black italic tracking-widest animate-pulse uppercase">
+            Syncing Cloud Data...
+          </p>
+        </div>
       </div>
     );
   }
@@ -236,6 +303,11 @@ const App: React.FC = () => {
       <Navbar settings={settings} onAdminClick={() => setShowAdminLogin(true)} />
       <main className="flex-grow">
         <Hero settings={settings} />
+        <div className="marquee-container">
+          <div className="animate-marquee">
+            {settings.announcement} &nbsp; &nbsp; &nbsp; &nbsp; {settings.announcement}
+          </div>
+        </div>
         <ProductSection products={products} />
         <InstallationSection cases={cases} />
         <NewsSection news={news} />
@@ -243,7 +315,9 @@ const App: React.FC = () => {
       </main>
       <Footer settings={settings} />
       <FloatingKakao />
-      {showAdminLogin && <AdminLogin onClose={() => setShowAdminLogin(false)} onSubmit={handleAdminAuth} />}
+      {showAdminLogin && (
+        <AdminLogin onClose={() => setShowAdminLogin(false)} onSubmit={handleAdminAuth} />
+      )}
       {showSuccessModal && <SuccessModal onClose={() => setShowSuccessModal(false)} />}
     </div>
   );
